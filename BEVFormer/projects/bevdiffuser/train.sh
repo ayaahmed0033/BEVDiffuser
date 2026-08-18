@@ -5,36 +5,31 @@ PORT=${PORT:-29503}
 
 BEV_CONFIG="../configs/bevdiffuser/layout_tiny.py"
 BEV_CHECKPOINT="../../ckpts/bevformer_tiny_epoch_24.pth"
-PRETRAINED_MODEL="stabilityai/stable-diffusion-2-1"
+PRETRAINED_MODEL="/home/aya/BEVDiffuser/BEVFormer/hf_models/stable-diffusion-2-1"
 PRETRAINED_UNET_CHECKPOINT=None
 
-# set up wandb project
-PROJ_NAME=BEVDiffuser
-RUN_NAME=BEVDiffuser_BEVFormer_tiny
+PROJ_NAME=BEVDiffusers
+RUN_NAME=noise_construction
 
-# checkpoint settings
-CHECKPOINT_STEP=5000
+CHECKPOINT_STEP=1000
 CHECKPOINT_LIMIT=20
 
-# allow 500 extra steps to be safe
-MAX_TRAINING_STEPS=50000
-TRAIN_BATCH_SIZE=8
+MAX_TRAINING_STEPS=10001
+TRAIN_BATCH_SIZE=1
 DATALOADER_NUM_WORKERS=8
-GRADIENT_ACCUMMULATION_STEPS=1
+GRADIENT_ACCUMMULATION_STEPS=8
 
-# loss and lr settings
 LEARNING_RATE=1e-4
 LR_SCHEDULER="constant"
 
 UNCOND_PROB=0.2
-PREDICTION_TYPE="sample" # "sample", "epsilon" or "v_prediction"
+PREDICTION_TYPE="sample"
 TASK_LOSS_SCALE=0.1
 
 OUTPUT_DIR="../../train/${RUN_NAME}"
 
 mkdir -p $OUTPUT_DIR
 
-# train!
 PYTHONPATH="$(dirname $0)/../..":$PYTHONPATH \
 python -m torch.distributed.launch --nproc_per_node=$GPUS --master_port=$PORT \
   $(dirname "$0")/train_bev_diffuser.py \
@@ -56,9 +51,6 @@ python -m torch.distributed.launch --nproc_per_node=$GPUS --master_port=$PORT \
     --uncond_prob $UNCOND_PROB \
     --prediction_type $PREDICTION_TYPE \
     --task_loss_scale $TASK_LOSS_SCALE \
-    --report_to 'wandb' \
-    # --gradient_checkpointing \
-
-
-
-
+    --use_ncm   \
+    --resume_from_checkpoint /home/aya/BEVDiffuser/BEVFormer/train/noise_construction/checkpoint-2000 
+        #--report_to 'wandb'
