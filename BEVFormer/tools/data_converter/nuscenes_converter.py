@@ -19,8 +19,102 @@ from pyquaternion import Quaternion
 from shapely.geometry import MultiPoint, box
 from typing import List, Tuple, Union
 
-from mmdet3d.core.bbox.box_np_ops import points_cam2img
-from mmdet3d.datasets import NuScenesDataset
+
+# Avoid importing mmdet3d CUDA ops during dataset preparation.
+# Original:
+# from mmdet3d.core.bbox.box_np_ops import points_cam2img
+import numpy as np
+
+def points_cam2img(points_3d, proj_mat, with_depth=False):
+    """Project 3D camera coordinates to image coordinates."""
+    points_3d = np.asarray(points_3d)
+    proj_mat = np.asarray(proj_mat)
+
+    original_shape = points_3d.shape[:-1]
+    points = points_3d.reshape(-1, 3)
+
+    if proj_mat.shape == (3, 3):
+        points_2d = points @ proj_mat.T
+    else:
+        ones = np.ones((points.shape[0], 1), dtype=points.dtype)
+        points_4 = np.concatenate([points, ones], axis=1)
+        points_2d = points_4 @ proj_mat.T
+        points_2d = points_2d[:, :3]
+
+    depth = points_2d[:, 2:3]
+    img = points_2d[:, :2] / np.maximum(depth, 1e-5)
+
+    if with_depth:
+        out = np.concatenate([img, depth], axis=1)
+    else:
+        out = img
+
+    return out.reshape(*original_shape, out.shape[-1])
+
+
+# Avoid importing mmdet3d.datasets during dataset preparation.
+# Original:
+# 
+# Avoid importing mmdet3d.datasets during dataset preparation.
+# Original:
+# 
+# Avoid importing mmdet3d.datasets during data preparation.
+class NuScenesDataset:
+    NameMapping = {
+        'movable_object.barrier': 'barrier',
+        'vehicle.bicycle': 'bicycle',
+        'vehicle.bus.bendy': 'bus',
+        'vehicle.bus.rigid': 'bus',
+        'vehicle.car': 'car',
+        'vehicle.construction': 'construction_vehicle',
+        'vehicle.motorcycle': 'motorcycle',
+        'human.pedestrian.adult': 'pedestrian',
+        'human.pedestrian.child': 'pedestrian',
+        'human.pedestrian.construction_worker': 'pedestrian',
+        'human.pedestrian.police_officer': 'pedestrian',
+        'movable_object.trafficcone': 'traffic_cone',
+        'vehicle.trailer': 'trailer',
+        'vehicle.truck': 'truck',
+    }
+
+
+class NuScenesDataset:
+    NameMapping = {
+        'movable_object.barrier': 'barrier',
+        'vehicle.bicycle': 'bicycle',
+        'vehicle.bus.bendy': 'bus',
+        'vehicle.bus.rigid': 'bus',
+        'vehicle.car': 'car',
+        'vehicle.construction': 'construction_vehicle',
+        'vehicle.motorcycle': 'motorcycle',
+        'human.pedestrian.adult': 'pedestrian',
+        'human.pedestrian.child': 'pedestrian',
+        'human.pedestrian.construction_worker': 'pedestrian',
+        'human.pedestrian.police_officer': 'pedestrian',
+        'movable_object.trafficcone': 'traffic_cone',
+        'vehicle.trailer': 'trailer',
+        'vehicle.truck': 'truck',
+    }
+
+
+class NuScenesDataset:
+    NameMapping = {
+        'movable_object.barrier': 'barrier',
+        'vehicle.bicycle': 'bicycle',
+        'vehicle.bus.bendy': 'bus',
+        'vehicle.bus.rigid': 'bus',
+        'vehicle.car': 'car',
+        'vehicle.construction': 'construction_vehicle',
+        'vehicle.motorcycle': 'motorcycle',
+        'human.pedestrian.adult': 'pedestrian',
+        'human.pedestrian.child': 'pedestrian',
+        'human.pedestrian.construction_worker': 'pedestrian',
+        'human.pedestrian.police_officer': 'pedestrian',
+        'movable_object.trafficcone': 'traffic_cone',
+        'vehicle.trailer': 'trailer',
+        'vehicle.truck': 'truck',
+    }
+
 
 nus_categories = ('car', 'truck', 'trailer', 'bus', 'construction_vehicle',
                   'bicycle', 'motorcycle', 'pedestrian', 'traffic_cone',
@@ -212,7 +306,9 @@ def _fill_trainval_infos(nusc,
         pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])
         lidar_path, boxes, _ = nusc.get_sample_data(lidar_token)
 
-        mmcv.check_file_exist(lidar_path)
+        if not osp.exists(lidar_path):
+            print("Skipping missing lidar file:", lidar_path)
+            continue
         can_bus = _get_can_bus_info(nusc, nusc_can_bus, sample)
         ##
         info = {
@@ -419,7 +515,14 @@ def export_2d_annotation(root_path, info_path, version, mono3d=True):
                 cam_info['sample_data_token'],
                 visibilities=['', '1', '2', '3', '4'],
                 mono3d=mono3d)
-            (height, width, _) = mmcv.imread(cam_info['data_path']).shape
+            if not osp.exists(cam_info['data_path']):
+                print('Skipping missing camera image:', cam_info['data_path'])
+                continue
+            img = mmcv.imread(cam_info['data_path'])
+            if img is None:
+                print('Skipping unreadable camera image:', cam_info['data_path'])
+                continue
+            (height, width, _) = img.shape
             coco_2d_dict['images'].append(
                 dict(
                     file_name=cam_info['data_path'].split('data/nuscenes/')

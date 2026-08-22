@@ -29,7 +29,7 @@ class CustomNuScenesDiffusionDataset_layout(CustomNuScenesDataset):
         return data
     
     def embed_object_names(self):
-        pretrained_model_name_or_path = 'stabilityai/stable-diffusion-2-1'
+        pretrained_model_name_or_path = '/home/aya/BEVDiffuser/BEVFormer/hf_models/stable-diffusion-2-1'
         tokenizer = CLIPTokenizer.from_pretrained(
             pretrained_model_name_or_path, subfolder="tokenizer"
         )
@@ -153,7 +153,7 @@ class CustomNuScenesDiffusionDatasetV2_layout(CustomNuScenesDatasetV2):
         return data
     
     def embed_object_names(self):
-        pretrained_model_name_or_path = 'stabilityai/stable-diffusion-2-1'
+        pretrained_model_name_or_path = '/home/aya/BEVDiffuser/BEVFormer/hf_models/stable-diffusion-2-1'
         tokenizer = CLIPTokenizer.from_pretrained(
             pretrained_model_name_or_path, subfolder="tokenizer"
         )
