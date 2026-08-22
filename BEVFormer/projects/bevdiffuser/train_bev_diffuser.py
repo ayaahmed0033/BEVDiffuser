@@ -47,7 +47,7 @@ from scheduler_utils import DDIMGuidedScheduler
 from model_utils import get_bev_model, build_unet
 from test_bev_diffuser import evaluate
 from projects.bevdiffuser.noise_construction import NoiseConstructionModule
-
+from accelerate import DistributedDataParallelKwargs
 
 
 logger = get_logger(__name__, log_level="INFO")
@@ -66,11 +66,14 @@ def train():
         logging_dir=logging_dir
     )
 
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=None,
         log_with=args.report_to,
         project_config=accelerator_project_config,
+        kwargs_handlers=[ddp_kwargs],           # ADD THIS LINE
     )
 
     logging.basicConfig(
@@ -163,10 +166,13 @@ def train():
     ), "accelerate 0.16.0 or above is required"
 
     def save_model_hook(models, weights, output_dir):
-        for i, model in enumerate(models):
-            model.save_pretrained(os.path.join(output_dir, "unet"))
-
-            # make sure to pop weight so that corresponding model is not saved again
+        for model in models:
+            save_path = os.path.join(output_dir, "unet")
+            os.makedirs(save_path, exist_ok=True)
+            if hasattr(model, 'save_pretrained'):
+                model.save_pretrained(save_path)
+            else:
+                torch.save(model.state_dict(), os.path.join(save_path, "pytorch_model.bin"))
             weights.pop()
 
     def load_model_hook(models, input_dir):

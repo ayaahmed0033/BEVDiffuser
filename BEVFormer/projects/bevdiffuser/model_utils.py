@@ -13,6 +13,8 @@ from mmcv import Config
 from mmcv.runner import (load_checkpoint, wrap_fp16_model)
 from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmdet3d.models import build_model
+from layout_diffusion.layout_uvit import LayoutDiTModel, LayoutDiTModelIsotropic
+from layout_diffusion.layout_diffusion_unet import LayoutDiffusionUNetModel
 
 
 def get_bev_model(args):
@@ -87,21 +89,12 @@ def get_bev_model(args):
     return model
 
 def build_unet(cfg):
-    def get_obj_from_str(string, reload=False):
-        module, cls = string.rsplit(".", 1)
-        if reload:
-            module_imp = importlib.import_module(module)
-            importlib.reload(module_imp)
+    cfg = dict(cfg)                                          # don't mutate original
+    unet_type = cfg.pop("type", "LayoutDiffusionUNetModel") # default = original
 
-        return getattr(importlib.import_module(module, package=None), cls)
-    
-    layout_encoder = get_obj_from_str(cfg.parameters.layout_encoder.type)(
-        **cfg.parameters.layout_encoder.parameters
-    )
-
-    model_kwargs = dict(**cfg.parameters)
-    model_kwargs.pop('layout_encoder')
-    return get_obj_from_str(cfg.type)(
-        layout_encoder=layout_encoder,
-        **model_kwargs,
-    )
+    if unet_type == "LayoutDiTModel":
+        return LayoutDiTModel(**cfg)
+    elif unet_type == "LayoutDiTModelIsotropic":
+        return LayoutDiTModelIsotropic(**cfg)
+    else:
+        return LayoutDiffusionUNetModel(**cfg)
