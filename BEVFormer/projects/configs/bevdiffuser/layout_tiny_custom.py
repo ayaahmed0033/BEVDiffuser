@@ -49,13 +49,13 @@ queue_length = 3 # each sequence contains `queue_length` frames.
 
 num_bboxes = 300
 num_classes = len(class_names) + 2
-num_temporal_frames = 1
+num_temporal_frames = 3
 temporal_dt = 0.5
 use_3d_bbox = True
 
 unet = dict(
     type='layout_diffusion.layout_diffusion_unet.LayoutDiffusionUNetModel',
-    use_preconditioning=False,
+    use_preconditioning=True,
     parameters=dict(
         image_size=bev_h_,
         use_fp16=False,
@@ -220,7 +220,7 @@ model = dict(
             pc_range=point_cloud_range))))
 
 dataset_type = 'CustomNuScenesDiffusionDataset_layout'
-data_root = 'data/nuscenes/'
+data_root = '/mnt/sda/datasets/nuscenes/created/'
 file_client_args = dict(backend='disk')
 
 
@@ -274,12 +274,12 @@ data = dict(
         # we use box_type_3d='LiDAR' in kitti and nuscenes dataset
         # and box_type_3d='Depth' in sunrgbd and scannet dataset.
         box_type_3d='LiDAR'),
-    val=dict(type=dataset_type,
+    val=dict(type=dataset_type, test_mode=True, load_annos=True,
              data_root=data_root,
              ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
              pipeline=test_pipeline,  bev_size=(bev_h_, bev_w_),
-             classes=class_names, modality=input_modality, samples_per_gpu=1),
-    test=dict(type=dataset_type,
+             classes=class_names, modality=input_modality),
+    test=dict(type=dataset_type, test_mode=True, load_annos=True,
               data_root=data_root,
               ann_file=data_root + 'nuscenes_infos_temporal_val.pkl',
               pipeline=test_pipeline, bev_size=(bev_h_, bev_w_),

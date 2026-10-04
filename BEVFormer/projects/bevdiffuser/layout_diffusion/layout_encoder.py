@@ -157,6 +157,7 @@ class LayoutTransformerEncoder(nn.Module):
             use_key_padding_mask=False,
             not_use_layout_fusion_module=False,
             use_3d_bbox=False,
+            num_temporal_frames=1,          
     ):
         super().__init__()
         self.not_use_layout_fusion_module=not_use_layout_fusion_module
@@ -187,6 +188,14 @@ class LayoutTransformerEncoder(nn.Module):
             else:
                 bbox_dim = 4
             self.obj_bbox_embedding = nn.Linear(bbox_dim, hidden_dim)
+                # ---- Option B: zero-initialized time-offset embedding ----
+        self.num_temporal_frames = num_temporal_frames
+        if self.num_temporal_frames > 1:
+            self.obj_time_embedding = nn.Embedding(num_temporal_frames, hidden_dim)
+            nn.init.zeros_(self.obj_time_embedding.weight)
+        else:
+            self.obj_time_embedding = None
+        # ----------------------------------------------------------
         if 'obj_mask' in self.used_condition_types:
             self.obj_mask_embedding = nn.Linear(mask_size_for_layout_object * mask_size_for_layout_object, hidden_dim)
 
@@ -229,7 +238,7 @@ class LayoutTransformerEncoder(nn.Module):
         if 'obj_mask' in self.used_condition_types:
             self.obj_mask_embedding.to(th.float16)
 
-    def forward(self, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, image_patch_bbox=None, obj_name=None):
+    def forward(self, obj_class=None, obj_bbox=None, obj_mask=None, is_valid_obj=None, image_patch_bbox=None, obj_name=None, obj_time=None):
         assert (obj_class is not None) or (obj_bbox is not None) or (obj_mask is not None) or (obj_name is not None)
         outputs = {}
 

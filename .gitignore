@@ -24,3 +24,13 @@ all_py_files.txt
 train/
 data/
 wandb/
+
+# local data / heavy outputs
+data/
+BEVFormer/data/
+BEVFormer/train/
+BEVFormer/test/
+*.pth
+*.bin
+*.pkl
+*.json

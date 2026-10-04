@@ -57,7 +57,7 @@ def parse_args():
                         help='test config file path')
     
     parser.add_argument('--bev_checkpoint', 
-                        default="",
+                        default=" /home/aya/BEVDiffuser/BEVFormer/ckpts/bevformer_tiny_epoch_24.pth",
                         help='checkpoint file')
     
     parser.add_argument('--seed', type=int, default=0, help='random seed')
@@ -73,18 +73,14 @@ def parse_args():
     parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
-        default="stabilityai/stable-diffusion-2-1",
-        choices=[
-            "CompVis/stable-diffusion-v1-4",
-            "stabilityai/stable-diffusion-2-1"
-        ],
+        default="/home/aya/BEVDiffuser/BEVFormer/hf_models/stable-diffusion-2-1",
         help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
 
     parser.add_argument(
         "--checkpoint_dir",
         type=str,
-        default="",
+        default="/home/aya/BEVDiffuser/BEVFormer/train/base/checkpoint-50000",
         help="The checkpoint directory of unet.",
     )
 

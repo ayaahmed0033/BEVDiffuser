@@ -4,9 +4,9 @@ export CUDA_VISIBLE_DEVICES=0
 
 BEV_CONFIG="../configs/bevdiffuser/layout_tiny.py"
 
-CHECKPOINT_DIR="../../train/BEVDiffuser_BEVFormer_tiny/checkpoint-50000"
+CHECKPOINT_DIR="/home/aya/BEVDiffuser/BEVFormer/train/base/checkpoint-50000"
 
-BEV_CHECKPOINT="../../train/BEVDiffuser_BEVFormer_tiny/checkpoint-50000/bev_model.pth"
+BEV_CHECKPOINT="/home/aya/BEVDiffuser/BEVFormer/ckpts/bevformer_tiny_epoch_24.pth"
 # "../../ckpts/bevformer_tiny_epoch_24.pth" 
 
 PREDICTION_TYPE="sample"

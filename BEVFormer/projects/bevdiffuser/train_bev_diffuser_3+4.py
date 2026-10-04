@@ -46,8 +46,11 @@ from layout_diffusion.layout_diffusion_unet import LayoutDiffusionUNetModel
 from scheduler_utils import DDIMGuidedScheduler
 from model_utils import get_bev_model, build_unet
 from test_bev_diffuser import evaluate
+from projects.bevdiffuser.noise_construction import NoiseConstructionModule
 
+sys.path.insert(0, "/home/aya/BEVDiffuser")
 
+from integrated_training_profiler import create_training_profiler
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -114,6 +117,19 @@ def train():
         DDIM_scheduler.register_to_config(prediction_type=args.prediction_type)
 
     bev_model = get_bev_model(args)
+    ncm = None
+    if args.use_ncm:
+        ncm = NoiseConstructionModule(
+            num_train_timesteps=noise_scheduler.config.num_train_timesteps,
+            translation_range=args.ncm_translation_range,
+            scale_range=(args.ncm_scale_min, args.ncm_scale_max),
+            rotation_range=args.ncm_rotation_range,
+            p_identity=args.ncm_p_identity,
+            p_translation=args.ncm_p_translation,
+            p_scaling=args.ncm_p_scaling,
+            p_rotation=args.ncm_p_rotation,
+            noise_dist=args.ncm_noise_dist,
+        )
 
     bev_model.requires_grad_(False)
 
@@ -189,6 +205,9 @@ def train():
                 'use_3d_bbox': bev_cfg.use_3d_bbox,
                 'num_classes': bev_cfg.num_classes,
                 'num_bboxes': bev_cfg.num_bboxes,
+                'num_temporal_frames': getattr(bev_cfg, 'num_temporal_frames', 1),  # ADD
+                'temporal_dt': getattr(bev_cfg, 'temporal_dt', 0.5),                # ADD
+
             }
         )
 
@@ -200,6 +219,8 @@ def train():
                 'use_3d_bbox': bev_cfg.use_3d_bbox,
                 'num_classes': bev_cfg.num_classes,
                 'num_bboxes': bev_cfg.num_bboxes,
+                'num_temporal_frames': getattr(bev_cfg, 'num_temporal_frames', 1),  # ADD
+                'temporal_dt': getattr(bev_cfg, 'temporal_dt', 0.5),                # ADD
             }
         )
         logger.info(f"train dataset: {len(train_dataset)} samples, val dataset: {len(val_dataset)} samples")
@@ -237,11 +258,16 @@ def train():
         if 'layout_obj_bboxes' in batch:
             cond['obj_bbox'] = torch.stack(batch['layout_obj_bboxes'].data[0])
 
+        if 'layout_obj_time' in batch:
+            cond['obj_time'] = torch.stack(batch['layout_obj_time'].data[0])
+            
         if 'layout_obj_is_valid' in batch:
             cond['is_valid_obj'] = torch.stack(batch['layout_obj_is_valid'].data[0])
 
         if 'layout_obj_names' in batch:
             cond['obj_name'] = torch.stack(batch['layout_obj_names'].data[0])
+
+       
 
         if np.random.rand() < args.uncond_prob:
             if isinstance(unet.module, LayoutDiffusionUNetModel):
@@ -268,7 +294,8 @@ def train():
                         cond['obj_bbox'][:, 0] = torch.FloatTensor(
                             [0, 0, 1, 1]
                         )
-
+                if 'obj_time' in cond:
+                    cond['obj_time'] = torch.zeros_like(cond['obj_time'])
                 cond['is_valid_obj'] = torch.zeros_like(cond['is_valid_obj'])
                 cond['is_valid_obj'][:, 0] = 1.0
 
@@ -344,6 +371,18 @@ def train():
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
     logger.info(f"  Is SD21: {is_training_sd21}")
 
+    # Profile only the first five real training iterations on the main process.
+    # The schedule in integrated_training_profiler.py uses one wait iteration,
+    # one warm-up iteration, and three recorded iterations.
+    training_profiler = None
+    profiler_iteration = 0
+    profiler_finished = False
+
+    if accelerator.is_main_process:
+        training_profiler = create_training_profiler()
+        training_profiler.start()
+        print("[PROFILER] Integrated profiling started.")
+
     global_step = 0
     first_epoch = 0
     step_cnt = 0
@@ -388,12 +427,13 @@ def train():
 
             with accelerator.accumulate(unet):
 
-                with torch.no_grad():
-                    latents = bev_model(
-                        return_loss=False,
-                        only_bev=True,
-                        **batch
-                    ).detach()
+                with torch.profiler.record_function("Frozen_BEV_encoder"):
+                    with torch.no_grad():
+                        latents = bev_model(
+                            return_loss=False,
+                            only_bev=True,
+                            **batch
+                        ).detach()
 
                 latents = latents.reshape(
                     -1,
@@ -404,48 +444,40 @@ def train():
 
                 latents = latents.permute(0, 3, 1, 2).contiguous()
 
-                noise = torch.randn_like(latents)
-                bsz = latents.shape[0]
+                if ncm is not None:
+                    noise = ncm.sample_noise(latents)
+                else:
+                    noise = torch.randn_like(latents)
 
-                timesteps = torch.randint(
-                    0,
-                    noise_scheduler.config.num_train_timesteps,
-                    (bsz,),
-                    device=latents.device
-                )
+                bsz = latents.shape[0]
+                max_timestep = noise_scheduler.config.num_train_timesteps
+                timesteps = torch.randint(0, max_timestep, (bsz,), device=latents.device)
                 timesteps = timesteps.long()
 
-                noisy_latents = noise_scheduler.add_noise(
-                    latents,
-                    noise,
-                    timesteps
-                )
-
-                if noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
-
-                elif noise_scheduler.config.prediction_type == "sample":
-                    target = latents
-
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(
-                        latents,
-                        noise,
-                        timesteps
-                    )
-
+                ncm_params = None
+                if ncm is not None:
+                    noisy_latents, target, ncm_params = ncm.construct(
+                        latents, noise, timesteps, noise_scheduler,
+                        noise_scheduler.config.prediction_type)
                 else:
-                    raise ValueError(
-                        f"Unknown prediction type {noise_scheduler.config.prediction_type}"
-                    )
+                    noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+                    if noise_scheduler.config.prediction_type == "epsilon":
+                        target = noise
+                    elif noise_scheduler.config.prediction_type == "sample":
+                        target = latents
+                    elif noise_scheduler.config.prediction_type == "v_prediction":
+                        target = noise_scheduler.get_velocity(latents, noise, timesteps)
+                    else:
+                        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
                 cond = get_condition(batch)
 
-                model_pred = unet(
-                    noisy_latents,
-                    timesteps,
-                    **cond
-                )[0]
+                with torch.profiler.record_function("BEVDiffuser_UNet_forward"):
+                    model_pred = unet(
+                        noisy_latents,
+                        timesteps,
+                        **cond
+                    )[0]
                 denoise_loss = F.mse_loss(
                         model_pred.float(),
                         target.float(),
@@ -455,7 +487,8 @@ def train():
                
 
                 if args.task_loss_scale > 0 and noise_scheduler.config.prediction_type == "sample":
-                    task_loss = get_task_loss(model_pred, **batch)
+                    task_pred = ncm.invert(model_pred, ncm_params) if ncm_params is not None else model_pred
+                    task_loss = get_task_loss(task_pred, **batch)
                 else:
                     task_loss = 0
 
@@ -486,7 +519,8 @@ def train():
 
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
-                accelerator.backward(loss)
+                with torch.profiler.record_function("Loss_backward"):
+                    accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(
@@ -494,9 +528,25 @@ def train():
                         args.max_grad_norm
                     )
 
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
+                with torch.profiler.record_function("Optimizer_step"):
+                    optimizer.step()
+                    lr_scheduler.step()
+                    optimizer.zero_grad()
+
+            # Advance the profiler after one complete real training iteration.
+            # Profiling stops automatically after five iterations, while
+            # ordinary training may continue without profiling overhead.
+            if training_profiler is not None and not profiler_finished:
+                training_profiler.step()
+                profiler_iteration += 1
+
+                if profiler_iteration >= 5:
+                    training_profiler.stop()
+                    profiler_finished = True
+                    print(
+                        "[PROFILER] Completed. Trace saved to "
+                        "/home/aya/BEVDiffuser/profiler_traces"
+                    )
 
             if accelerator.sync_gradients:
                 progress_bar.update(1)
@@ -596,6 +646,11 @@ def train():
 
             if global_step >= args.max_train_steps:
                 break
+
+    # Close the profiler cleanly if training ends before five iterations.
+    if training_profiler is not None and not profiler_finished:
+        training_profiler.stop()
+        profiler_finished = True
 
     accelerator.wait_for_everyone()
     accelerator.end_training()
@@ -835,6 +890,17 @@ def parse_args():
         type=float,
         default=0.0
     )
+    parser.add_argument("--use_ncm", action="store_true")
+    parser.add_argument("--ncm_translation_range", type=float, default=2.0)
+    parser.add_argument("--ncm_scale_min", type=float, default=0.5)
+    parser.add_argument("--ncm_scale_max", type=float, default=1.5)
+    parser.add_argument("--ncm_rotation_range", type=float, default=1.5708)
+    parser.add_argument("--ncm_p_identity", type=float, default=0.25)
+    parser.add_argument("--ncm_p_translation", type=float, default=0.25)
+    parser.add_argument("--ncm_p_scaling", type=float, default=0.25)
+    parser.add_argument("--ncm_p_rotation", type=float, default=0.25)
+    parser.add_argument("--ncm_noise_dist", type=str, default="gaussian",
+                        choices=["gaussian", "laplace", "uniform"])
 
     
 

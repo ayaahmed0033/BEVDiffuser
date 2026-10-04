@@ -9,15 +9,15 @@ PRETRAINED_MODEL="/home/aya/BEVDiffuser/BEVFormer/hf_models/stable-diffusion-2-1
 PRETRAINED_UNET_CHECKPOINT=None
 
 PROJ_NAME=BEVDiffusers
-RUN_NAME=noise_construction
+RUN_NAME=base3
 
-CHECKPOINT_STEP=1000
+CHECKPOINT_STEP=50000
 CHECKPOINT_LIMIT=20
 
-MAX_TRAINING_STEPS=10001
-TRAIN_BATCH_SIZE=1
-DATALOADER_NUM_WORKERS=8
-GRADIENT_ACCUMMULATION_STEPS=8
+MAX_TRAINING_STEPS=50101
+TRAIN_BATCH_SIZE=1 
+DATALOADER_NUM_WORKERS=4
+GRADIENT_ACCUMMULATION_STEPS=2
 
 LEARNING_RATE=1e-4
 LR_SCHEDULER="constant"
@@ -50,7 +50,5 @@ python -m torch.distributed.launch --nproc_per_node=$GPUS --master_port=$PORT \
     --tracker_project_name $PROJ_NAME \
     --uncond_prob $UNCOND_PROB \
     --prediction_type $PREDICTION_TYPE \
-    --task_loss_scale $TASK_LOSS_SCALE \
-    --use_ncm   \
-    --resume_from_checkpoint /home/aya/BEVDiffuser/BEVFormer/train/noise_construction/checkpoint-2000 
-        #--report_to 'wandb'
+    --task_loss_scale $TASK_LOSS_SCALE 
+    #--use_ncm 
