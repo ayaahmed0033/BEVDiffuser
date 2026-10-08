@@ -35,7 +35,7 @@ from diffusers import DDPMScheduler
 from diffusers.optimization import get_scheduler
 
 from mmcv import Config, DictAction
-from mmcv.runner import get_dist_info
+from mmcv.runner import get_dist_info, save_checkpoint
 from mmdet3d.datasets import build_dataset
 from mmdet.apis import set_random_seed
 
@@ -555,8 +555,11 @@ def train():
 
                         accelerator.save_state(save_path)
 
-                       
-
+                        save_checkpoint(
+                            bev_model,
+                            filename=os.path.join(save_path, "bev_model.pth"),
+                        )
+                              
                         logger.info(f"Saved state to {save_path}")
 
                     unet.eval()
