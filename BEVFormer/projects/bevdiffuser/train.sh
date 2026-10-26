@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
+# TEMPORAL CONFIDENCE ATTENTION integration v1
+# EVSSM optional cached camera restoration
 
 GPUS=$1
+shift
 PORT=${PORT:-29503}
 
 BEV_CONFIG="../configs/bevdiffuser/layout_tiny.py"
@@ -8,28 +11,33 @@ BEV_CHECKPOINT="../../ckpts/bevformer_tiny_epoch_24.pth"
 PRETRAINED_MODEL="/home/aya/BEVDiffuser/BEVFormer/hf_models/stable-diffusion-2-1"
 PRETRAINED_UNET_CHECKPOINT=None
 
-PROJ_NAME=BEVDiffusers
-RUN_NAME=noise_construction
+# set up wandb project
+PROJ_NAME=BEVDiffuser
+RUN_NAME=svm_rbf 
 
+# checkpoint settings
 CHECKPOINT_STEP=50000
 CHECKPOINT_LIMIT=20
 
+# allow 500 extra steps to be safe
 MAX_TRAINING_STEPS=50100
-TRAIN_BATCH_SIZE=2 #8
-DATALOADER_NUM_WORKERS=4 #8
+TRAIN_BATCH_SIZE=2
+DATALOADER_NUM_WORKERS=4
 GRADIENT_ACCUMMULATION_STEPS=1
 
+# loss and lr settings
 LEARNING_RATE=1e-4
 LR_SCHEDULER="constant"
 
 UNCOND_PROB=0.2
-PREDICTION_TYPE="sample"
+PREDICTION_TYPE="sample" # "sample", "epsilon" or "v_prediction"
 TASK_LOSS_SCALE=0.1
 
 OUTPUT_DIR="../../train/${RUN_NAME}"
 
 mkdir -p $OUTPUT_DIR
 
+# train!
 PYTHONPATH="$(dirname $0)/../..":$PYTHONPATH \
 python -m torch.distributed.launch --nproc_per_node=$GPUS --master_port=$PORT \
   $(dirname "$0")/train_bev_diffuser.py \
@@ -50,9 +58,34 @@ python -m torch.distributed.launch --nproc_per_node=$GPUS --master_port=$PORT \
     --tracker_project_name $PROJ_NAME \
     --uncond_prob $UNCOND_PROB \
     --prediction_type $PREDICTION_TYPE \
-    --task_loss_scale $TASK_LOSS_SCALE 
-    #--report_to 'wandb' \
+    --task_loss_scale $TASK_LOSS_SCALE \
+    --bottleneck_time_gate \
+    --use_unet_bottleneck \
+    --svm_class_balance \
+    --use_svm \
+    --svm_kernel rbf \
+    --use_temporal_cross_attention \
+     \
+    "$@"
+    #--use_svm \
+    #--svm_class_balance \
+    #--use_unet_bottleneck \
+    #--bottleneck_time_gate \
+    # --use_ncm \
+
+    #  --use_svm --svm_kernel rbf \
+  # --grayscale_aug --use_unet_bottleneck \
+  #--bottleneck_time_gate --svm_class_balance
+    
+    # \--grayscale_aug \--use_unet_bottleneck  \ --bottleneck_time_gate \--svm_class_balance \
+    
+    #--use_evssm \
+    
+
+    #--use_raf \
+    # --report_to 'wandb' \
     # --gradient_checkpointing \
-    #--use_ncm   
-    #--resume_from_checkpoint /home/aya/BEVDiffuser/BEVFormer/train/noise_construction/checkpoint-2000 
-        #--report_to 'wandb'
+
+
+
+

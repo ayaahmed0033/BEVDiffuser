@@ -1,3 +1,7 @@
+# TEMPORAL CONFIDENCE ATTENTION integration v1
+# SHAPE SVM optional integration v2
+# EVSSM optional cached camera restoration
+from evssm_cache import add_evssm_args, configure_evssm, save_evssm_config
 # Copyright (c) 2025 Robert Bosch GmbH
 # SPDX-License-Identifier: AGPL-3.0
 
@@ -44,13 +48,28 @@ from mmdet.apis import set_random_seed
 
 from scheduler_utils import DDIMGuidedScheduler
 from model_utils import get_bev_model, build_unet
+from projects.bevdiffuser.temporal_cross_attention import (
+    add_temporal_arguments, restore_temporal_options,
+    configure_temporal_cross_attention, load_pretrained_with_temporal,
+    register_temporal_metadata, get_temporal_runtime, set_temporal_trainable)
+from projects.bevdiffuser.shape_integration import (
+    add_shape_arguments, active as shape_active, restore_options,
+    validate as validate_shape, configure_unet, load_shape_unet)
 from layout_diffusion.layout_diffusion_unet import LayoutDiffusionUNetModel
+from raf_reliability import (CameraReliability, ReliabilityController,
+                             check_checkpoint_mode, load_reliability, strict_load_unet)
 
 logger = get_logger(__name__, log_level="INFO")
 
 def parse_args():
      # put all arg parse here
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
+    add_temporal_arguments(parser)
+    add_shape_arguments(parser)
+    add_evssm_args(parser)
+    parser.add_argument('--no_raf', dest='use_raf', action='store_false', default=argparse.SUPPRESS, help='Disable a launcher default RAF flag for an independent experiment')
+    parser.add_argument('--use_raf', action='store_true',
+                        help='Load and apply trained camera reliability gating')
     
     parser.add_argument('--bev_config', 
                         default="",
@@ -71,9 +90,10 @@ def parse_args():
     parser.add_argument('--local_rank', type=int, default=0)
 
     parser.add_argument(
-    "--pretrained_model_name_or_path",
-    type=str,
-    default="/home/aya/BEVDiffuser/BEVFormer/hf_models/stable-diffusion-2-1",
+        "--pretrained_model_name_or_path",
+        type=str,
+        default="/home/aya/BEVDiffuser/BEVFormer/hf_models/stable-diffusion-2-1",
+        help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
 
     parser.add_argument(
@@ -141,8 +161,20 @@ def parse_args():
     
 def test():
     args = parse_args()
+    restore_temporal_options(args, args.checkpoint_dir, exact=True)
+    restore_options(args, args.checkpoint_dir, exact=True)
+    validate_shape(args)
+    args._shape_exact = True
+    if args.use_svm:
+        args.bev_checkpoint = os.path.join(args.checkpoint_dir, 'bev_model.pth')
+    raf_config = check_checkpoint_mode(args.checkpoint_dir, args.use_raf, exact_resume=args.use_raf)
+    if args.use_raf:
+        if args.prediction_type not in (None, 'sample'):
+            raise ValueError('--use_raf requires --prediction_type sample')
+        args.prediction_type = 'sample'
 
     bev_cfg = Config.fromfile(args.bev_config)
+    evssm_config = configure_evssm(args, bev_cfg, training=False)
     
     # set random seeds
     if args.seed is not None:
@@ -163,10 +195,26 @@ def test():
         bev_model.requires_grad_(False)
     
     unet = build_unet(bev_cfg.unet)
-    unet.from_pretrained(args.checkpoint_dir, subfolder="unet")
+    configure_unet(unet, args)
+    temporal_runtime = configure_temporal_cross_attention(unet, bev_model, bev_cfg, args)
+    if shape_active(args):
+        load_pretrained_with_temporal(unet, args.checkpoint_dir, lambda: load_shape_unet(unet, args.checkpoint_dir), required=True)
+    elif args.use_raf:
+        load_pretrained_with_temporal(unet, args.checkpoint_dir, lambda: strict_load_unet(unet, args.checkpoint_dir), required=True)
+    else:
+        load_pretrained_with_temporal(unet, args.checkpoint_dir, lambda: unet.from_pretrained(args.checkpoint_dir, subfolder="unet"), required=True)
     unet.to(bev_model.device, dtype=torch.float32)
     unet.requires_grad_(False) 
     unet.eval()
+    raf_controller = None
+    if args.use_raf:
+        raf = CameraReliability(channels=bev_cfg.model.img_neck.out_channels,
+                                hidden_channels=raf_config['hidden_channels'],
+                                min_weight=raf_config['min_weight'])
+        load_reliability(raf, args.checkpoint_dir)
+        raf.to(bev_model.device, dtype=torch.float32).requires_grad_(False)
+        raf.eval()
+        raf_controller = ReliabilityController(bev_model, raf)
     
     bev_cfg.data.test.test_mode = True
     bev_cfg.data.test.load_annos = True
@@ -199,7 +247,8 @@ def test():
              noise_timesteps=args.noise_timesteps,
              denoise_timesteps=args.denoise_timesteps,
              num_inference_steps=args.num_inference_steps,
-             use_classifier_guidence=args.use_classifier_guidence)
+             use_classifier_guidence=args.use_classifier_guidence,
+             raf_controller=raf_controller)
 
 
 def evaluate(unet,
@@ -213,7 +262,8 @@ def evaluate(unet,
              noise_timesteps=0,
              denoise_timesteps=0,
              num_inference_steps=0,
-             use_classifier_guidence=False):
+             use_classifier_guidence=False,
+             raf_controller=None):
     
     def get_classifier_gradient(x, **kwargs):
         x_ = x.detach().requires_grad_(True)
@@ -266,13 +316,23 @@ def evaluate(unet,
         prog_bar = mmcv.ProgressBar(len(dataset))
     time.sleep(2)  # This line can prevent deadlock problem in some cases.
     
+    temporal_runtime = get_temporal_runtime(unet)
+
     for step, batch in enumerate(dataloader):
         
-        latents = bev_model(return_loss=False, only_bev=True, **batch).detach()
+        if temporal_runtime is not None:
+            temporal_runtime.begin_bev_call()
+        if raf_controller is not None:
+            with torch.no_grad(), raf_controller.apply(augment=False):
+                latents = bev_model(return_loss=False, only_bev=True, **batch).detach()
+        else:
+            latents = bev_model(return_loss=False, only_bev=True, **batch).detach()
         
         latents = latents.reshape(-1, bev_cfg.bev_h_, bev_cfg.bev_w_, bev_cfg._dim_)
         
         latents = latents.permute(0, 3, 1, 2)
+        if temporal_runtime is not None:
+            temporal_runtime.use_captured_context(latents)
         
         if noise_timesteps > 0:
             if noise_timesteps > 1000:
@@ -301,6 +361,8 @@ def evaluate(unet,
         latents = latents.permute(0, 2, 3, 1)            
         latents = latents.reshape(-1, bev_cfg.bev_h_*bev_cfg.bev_w_, bev_cfg._dim_)
         det_result = bev_model(return_loss=False, only_bev=False, given_bev=latents, rescale=True, **batch)
+        if temporal_runtime is not None:
+            temporal_runtime.clear_context()
         
         if isinstance(det_result, dict):
             if 'bbox_results' in det_result.keys():
@@ -345,3 +407,8 @@ def evaluate(unet,
 
 if __name__ == "__main__":
     test()
+
+
+
+
+

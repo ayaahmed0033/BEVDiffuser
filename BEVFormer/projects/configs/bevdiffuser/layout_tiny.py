@@ -49,13 +49,10 @@ queue_length = 3 # each sequence contains `queue_length` frames.
 
 num_bboxes = 300
 num_classes = len(class_names) + 2
-num_temporal_frames = 1
-temporal_dt = 0.5
 use_3d_bbox = True
 
 unet = dict(
     type='layout_diffusion.layout_diffusion_unet.LayoutDiffusionUNetModel',
-    use_preconditioning=False,
     parameters=dict(
         image_size=bev_h_,
         use_fp16=False,
@@ -92,7 +89,6 @@ unet = dict(
                 resolution_to_attention=[12, 25, 50], #[ 8, 16, 32 ],
                 use_key_padding_mask=False,
                 use_3d_bbox=use_3d_bbox),
-                num_temporal_frames=num_temporal_frames,
             ),
     ),
 )

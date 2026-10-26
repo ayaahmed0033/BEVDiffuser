@@ -1,3 +1,4 @@
+# SHAPE SVM optional integration v2
 # Copyright (c) 2025 Robert Bosch GmbH
 # SPDX-License-Identifier: AGPL-3.0
 
@@ -61,6 +62,8 @@ def get_bev_model(args):
         # init_dist(args.launcher, **cfg.dist_params)
         
     cfg.model.pretrained = None
+    from projects.bevdiffuser.shape_integration import configure_model
+    configure_model(cfg, args)
     model = build_model(cfg.model, 
                         train_cfg=cfg.get('train_cfg'),
                         test_cfg=cfg.get('test_cfg'))
@@ -68,6 +71,12 @@ def get_bev_model(args):
     if fp16_cfg is not None:
         wrap_fp16_model(model)
     checkpoint = load_checkpoint(model, args.bev_checkpoint, map_location='cpu')
+    if getattr(args, '_shape_exact', False) and args.use_svm:
+        state = checkpoint.get('state_dict', checkpoint)
+        keys = {key[7:] if key.startswith('module.') else key for key in state}
+        expected = {key for key in model.state_dict() if '.shape_svm.' in key}
+        if not expected.issubset(keys):
+            raise ValueError('Evaluation/resume requires bev_model.pth containing all trained SVM weights')
     
     if 'CLASSES' in checkpoint.get('meta', {}):
         model.CLASSES = checkpoint['meta']['CLASSES']
